@@ -1,0 +1,1190 @@
+
+
+
+DEG
+#Load required packages####
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(plyr)
+library(tidyverse)
+#Load sample annotation
+sampleTable <- read.table("EGCG6h_metadata",header=TRUE)
+
+#Locate the data ####
+folder <- "EGCG_6h_counts"
+
+#Import the data ####
+dds <- DESeqDataSetFromHTSeqCount(sampleTable=sampleTable,
+                                  directory=folder,
+                                  design=~treatment)
+
+design_matrix <- model.matrix(~treatment,data = colData(dds))
+
+counts(dds)["AT5G61890",]
+#Remove genes (rows) with less than 10 counts in total ####
+dds <- dds[rowSums(counts(dds)) >= 6, ]
+
+
+dds1 <- DESeq(dds)
+
+res <- results(dds1)
+normalized_counts <- counts(dds1,normalized=TRUE)
+
+res.shr <- lfcShrink(dds1,coef=2)
+res.shr["AT5G61890",]
+
+#Remove genes with missing padj ####
+resDF <- as.data.frame(res.shr[!is.na(res.shr$padj),])
+
+#Add gene symbols to data ####
+library(org.At.tair.db)
+keys <- keys(org.At.tair.db)
+head(keys)
+columns(org.At.tair.db)
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+BiocManager::install("AnnotationDbi")
+
+#Make data frame with Ensembl IDs and symbols for all genes
+s <- AnnotationDbi::select(org.At.tair.db, keys = keys, 
+                           columns = c("TAIR", "SYMBOL"))
+
+#Remove rows with missing GENE IDs
+s <- s[!is.na(s$TAIR),c("TAIR","SYMBOL")]
+
+#Create column in resFix with GENE IDS (now row names)
+resDF$TAIR <- rownames(resDF)
+
+#Join both tables based on Ensembl IDs
+resDF <- merge(resDF, s, by = "TAIR")
+ 
+
+#Remove duplicated rows
+resDF <- resDF[!duplicated(resDF$TAIR),]
+
+
+up_6h <- resDF[(resDF$log2FoldChange > 0 & resDF$padj < 0.01), ]
+down_6h <- resDF[(resDF$log2FoldChange < 0 & resDF$padj < 0.01), ]
+
+# Assuming your data frame is named 'yourDataFrame'
+write.csv(normalized_counts, file = "normalized_counts_6h.csv", row.names = FALSE)
+
+write.csv(up_6h, file = "up_6h_padj0.01.csv", row.names = FALSE)
+
+write.csv(down_6h, file = "down_6h_padj0.01.csv", row.names = FALSE)
+
+
+write.csv(resDF, file = "resDF6h.csv", row.names = FALSE)
+
+# Save the entire workspace (environment)
+save.image(file = "DE6h.RData")
+
+
+library(clusterProfiler)
+# Example Arabidopsis gene list
+arabidopsis_gene_list <- c("AT1G01010", "AT2G34567", "AT3G09876", "AT4G56789", "AT5G43210")
+# Map Arabidopsis gene symbols to gene IDs
+gene_ids <- bitr(arabidopsis_gene_list, fromType = "SYMBOL", toType = "TAIR", OrgDb = org.At.tair.db)
+
+# Perform GO enrichment analysis
+go_enrich <- enrichGO(gene = up_6h$TAIR, 
+                      OrgDb = org.At.tair.db,
+                      keyType = "TAIR",
+                      ont = "BP",  # Biological Process ontology, you can change it to "MF" or "CC" for Molecular Function or Cellular Component
+                      pAdjustMethod = "BH",
+                      qvalueCutoff = 0.05)
+
+# Display the results
+print(go_enrich)
+# Plot top 20 GO clusters
+dotplot(go_enrich, showCategory = 20)
+# Install the necessary package if not already installed
+# install.packages("enrichplot")
+
+# Load the package
+library(enrichplot)
+library(ggplot2)
+# Customize and save the plot
+dot <- dotplot(go_enrich, showCategory = 20)
+dot + ggplot2::ggtitle("Top 20 GO Clusters")  # Customize the title
+ggsave("uptop20_GO_clusters.png", plot = dot, width = 8, height = 6, dpi = 300)  # Save the plot to a file
+
+
+go_enrich <- enrichGO(gene = down_6h$TAIR, 
+                      OrgDb = org.At.tair.db,
+                      keyType = "TAIR",
+                      ont = "BP",  # Biological Process ontology, you can change it to "MF" or "CC" for Molecular Function or Cellular Component
+                      pAdjustMethod = "BH",
+                      qvalueCutoff = 0.05)
+dot <- dotplot(go_enrich, showCategory = 20)
+dot + ggplot2::ggtitle("Top 20 GO Clusters")  # Customize the title
+ggsave("downtop20_GO_clusters.png", plot = dot, width = 8, height = 6, dpi = 300)  # Save the plot to a file
+
+save.image(file = "DE6h.RData")
+
+vsd <- vst(normalized_counts,blind=FALSE)
+class(vsd)
+heatmap_data <- assay(vsd)
+#CheckGO term of specific gene ERF114
+library(org.At.tair.db)  # Arabidopsis annotation package
+data("org.At.tair.db")   # Arabidopsis annotation database
+
+# Define the gene of interest
+gene_of_interest <- "AT5G61890"  # Replace with your Arabidopsis gene of interest
+
+# Fetch all GO terms associated with the gene of interest
+associated_GO_terms <- select(org.At.tair.db, keys=gene_of_interest, 
+                              keytype="TAIR", columns=c("GO"))
+
+# Print associated GO terms
+print("Associated GO Terms:")
+print(associated_GO_terms)
+       TAIR         GO EVIDENCE ONTOLOGY
+1 AT5G61890 GO:0000976      IPI       MF
+2 AT5G61890 GO:0003700      ISS       MF
+3 AT5G61890 GO:0005515      IPI       MF
+4 AT5G61890 GO:0005634      ISM       CC
+5 AT5G61890 GO:0006355      IEA       BP
+6 AT5G61890 GO:0050832      IEP       BP
+
+
+DEtable1 <- read.csv(file = "DEtable1.csv", header = TRUE)
+up_6h <- read.csv(file = "up_6h_padj0.01.csv",header = TRUE)
+down_6h <- read.csv(file = "down_6h_padj0.01.csv",header = TRUE)
+up_12h <- read.csv(file = "up_12h_padj0.01.csv",header = TRUE)
+down_12h <- read.csv(file = "down_12h_padj0.01.csv",header = TRUE)
+#remove rows that have low or no reads, except the first column
+DEtable1 <- DEtable1[rowSums(DEtable1[, -1]) >= 10, ]
+# Assuming DEtable1 is your data frame
+colnames(DEtable1)[1] <- "TAIR"
+
+#remove column 4 and 5
+up_6h <- up_6h[, -c(4,5)]
+down_6h <- down_6h[, -c(4,5)]
+up_12h <- up_12h[, -c(4,5)]
+down_12h <- down_12h[, -c(4,5)]
+# Assuming DEtable1 and up_6h are your data frames
+merged_data <- merge(DEtable1, up_6h, by = "TAIR", all.x = TRUE)
+merged_data <- merge(merged_data, down_6h, by = "TAIR", all.x = TRUE)
+merged_data <- merge(merged_data, up_12h, by = "TAIR", all.x = TRUE)
+merged_data <- merge(merged_data, down_12h, by = "TAIR", all.x = TRUE)
+
+# Assuming merged_data is your data frame
+colnames(merged_data)[10:13] <- c("up6h_basemean", "up6h_log2FC", "up6h_padj", "up6h_symbol")
+
+colnames(merged_data)[14:17] <- c("down6h_basemean", "down6h_log2FC", "down6h_padj", "down6h_symbol")
+
+colnames(merged_data)[18:21] <- c("up12h_basemean", "up12h_log2FC", "up12h_padj", "up12h_symbol")
+
+colnames(merged_data)[22:25] <- c("down12h_basemean", "down12h_log2FC", "down12h_padj", "down12h_symbol")
+
+# Assuming merged_data is your data frame
+merged_data1 <- merged_data[complete.cases(merged_data[, 10:21]), ]
+# Assuming merged_data is your data frame
+merged_data1 <- merged_data[rowSums(!is.na(merged_data[, 10:21])) > 0, ]
+
+write.csv(merged_data1, file = "mergeddata.csv",row.names = FALSE)
+library(ggplot2)
+library(Biobase)  # base functions of Bioconductor
+library(org.At.tair.db) # Araport annotation
+install.packages("rrvgo")
+library("rrvgo")
+library("venn")
+install.packages("BiocManager")
+BiocManager::install("rrvgo")
+install.packages("venn")
+# VENN DIAGRAMS ----
+# helper function to display venn diagram
+display_venn <- function(x, ...){
+  library(VennDiagram)
+  grid.newpage()
+  venn_object <- venn.diagram(x,print.mode = c("raw"), filename = NULL, ...)
+  grid.draw(venn_object)
+}
+# load data for venn diagram
+# load your own data here, make sure you select the column with the TAIR ATG numbers to continue
+# you can also load more dataframes when needed, just make sure that you also increase the number of colors and distance to names in the display_venn function
+df1 <- up_6h$TAIR
+df2 <- up_12h$TAIR
+df3 <- down_6h$TAIR
+df4 <- down_12h$TAIR
+# combine both data frames into one
+# the name in "..." is the name displayed in the venn diagram
+data<-list("up_6h"=df1, "up_12h"=df2, "down_6h"=df3, "down_12h"=df4)
+
+
+# plot venn diagram
+venn1 <- display_venn(data,
+                      lwd = 2,
+                      lty = "blank",
+                    
+                      cex = 1,
+                      cat.cex = 0.9,
+                      cat.fontface = 2,
+                      cat.default.pos = "outer",
+                      cat.dist = c(0.03, 0.03, 0.03, 0.03))
+
+venn1 <- ggsave("venn.png", plot = venn1, width = 6, height = 6, dpi = 600)
+
+# get IDs from (non)overlapping regions:
+ItemsList <- venn(data, show.plot = FALSE)
+str(ItemsList)
+inters <- attr(ItemsList,"intersections")
+
+# fetch the ID´s of the regions you are interested in:
+# in inters$[...] you can choose the region of interest
+overlap <- as.data.frame(inters$`up_6h:up_12h`)
+
+# export data
+write.csv2(overlap, "up_6hup_12h.csv")
+
+venn <- ggsave("venn.png", plot = venn1, width = 6, height = 6, dpi = 600)
+
+
+onlyup_6h <- read.csv2(file = "0nlyup_6h.csv",header = TRUE)
+
+library(clusterProfiler)
+# Example Arabidopsis gene list
+arabidopsis_gene_list <- c("AT1G01010", "AT2G34567", "AT3G09876", "AT4G56789", "AT5G43210")
+# Map Arabidopsis gene symbols to gene IDs
+gene_ids <- bitr(arabidopsis_gene_list, fromType = "SYMBOL", toType = "TAIR", OrgDb = org.At.tair.db)
+
+# Perform GO enrichment analysis
+go_enrich <- enrichGO(gene = up_6h$TAIR, 
+                      OrgDb = org.At.tair.db,
+                      keyType = "TAIR",
+                      ont = "BP",  # Biological Process ontology, you can change it to "MF" or "CC" for Molecular Function or Cellular Component
+                      pAdjustMethod = "BH",
+                      qvalueCutoff = 0.05)
+
+# Display the results
+print(go_enrich)
+print(go_enrich[, c("ID", "Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "qvalue", "Count")])
+write.csv(go_enrich[, c("ID", "Description", "GeneRatio", "BgRatio", "pvalue", "p.adjust", "qvalue", "Count")], file = "go_terms.csv", row.names = FALSE)
+# Define the GO term ID or description you want to extract genes for
+
+
+
+colnames(onlyup_6h1) <- c("TAIR")
+onlyup_6h1 <- as.data.frame(onlyup_6h[,2])
+# get annotation for gene IDs
+Annotation_onlyup_6h1<- bitr(onlyup_6h1$TAIR, fromType = "TAIR",
+                      toType = c("ENTREZID", "SYMBOL"),
+                      OrgDb = org.At.tair.db)
+
+GO_IDs<- enrichGO(gene       =  Annotation_onlyup_6h1$ENTREZID,
+                  OrgDb         = org.At.tair.db,
+                  ont           = "BP",
+                  pAdjustMethod = "BH",
+                  pvalueCutoff  = 0.7,
+                  qvalueCutoff  = 0.7,
+                  readable      = TRUE)
+library(org.At.tair.db)
+# calculate similarity matrix rrvgo
+library(rrvgo)
+simMatrix<- calculateSimMatrix(GO_IDs$ID,
+                               orgdb="org.At.tair.db",
+                               ont="BP")
+# this might take some minutes
+
+# get the scores of the similarity matrix
+scores <- setNames(-log10(GO_IDs$qvalue), GO_IDs$ID)
+
+# reduce GO terms
+reducedTerms <- reduceSimMatrix(simMatrix,
+                                scores,
+                                threshold=0.7,
+                                orgdb="org.At.tair.db")
+# the lower the threshold, the more GO terms are included (= they will be less reduced)
+
+
+
+library(ggplot2)  # Load the ggplot2 library
+
+scatterPlot(simMatrix, reducedTerms) +
+  theme_bw() +
+   # Choose one color from viridis
+  theme(legend.position = "top")
+
+
+
+
+
+
+scatterPlot(simMatrix, reducedTerms) +
+  theme_bw() +
+  theme(legend.position = "left")
+scatterPlot(simMatrix, reducedTerms) +
+  theme_bw() +
+  theme(legend.position = "top")  # Set position to "top"
+
+
+
+
+
+
+
+# Convert reducedTerms to a data frame for ggplot2
+reduced_df <- data.frame(
+  GO_ID = names(reducedTerms),
+  Similarity = reducedTerms
+)
+
+# Load necessary libraries
+library(clusterProfiler)
+library(org.At.tair.db)
+library(rrvgo)
+library(ggplot2)
+
+# Perform GO term enrichment analysis
+GO_IDs <- enrichGO(
+  gene = Annotation_onlyup_6h1$ENTREZID,
+  OrgDb = org.At.tair.db,
+  ont = "BP",
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.4,
+  qvalueCutoff = 0.4,
+  readable = TRUE
+)
+
+# Calculate similarity matrix
+simMatrix <- calculateSimMatrix(
+  GO_IDs$ID,
+  orgdb = "org.At.tair.db",
+  ont = "BP"
+)
+
+# Get the scores of the similarity matrix
+scores <- setNames(-log10(GO_IDs$qvalue), GO_IDs$ID)
+
+# Reduce GO terms
+reducedTerms <- reduceSimMatrix(
+  simMatrix,
+  scores,
+  threshold = 0.7,
+  orgdb = "org.At.tair.db"
+)
+
+# Convert reducedTerms to a data frame for ggplot2
+reduced_df <- data.frame(
+  GO_ID = names(reducedTerms),
+  Similarity = reducedTerms
+)
+
+# Add a category variable for the legend
+reduced_df$category <- ifelse(reduced_df$Similarity > 0.7, "High Similarity", "Low Similarity")
+
+# Scatterplot of reduced GO terms with legend
+ggplot(reduced_df, aes(x = Similarity, y = GO_ID, color = category)) +
+  geom_point() +
+  theme_bw() +
+  scale_color_manual(values = c("High Similarity" = "blue", "Low Similarity" = "red")) +  # Customize colors
+  labs(color = "Similarity Category") +  # Customize legend label
+  theme(legend.position = "top")  # Position the legend
+
+
+
+# Define the GO term ID or description you want to extract genes for
+endocytosis_go_term <- "GO:0006897"  # Example: "endocytosis"
+
+# Filter the go_enrich data frame to extract genes for the desired GO term
+endocytosis_genes <- go_enrich[go_enrich$ID == endocytosis_go_term, "geneID"]
+
+
+wounding_go_term <- "GO:0009611"  
+
+# Filter the go_enrich data frame to extract genes for the desired GO term
+wounding_genes <- go_enrich[go_enrich$ID == wounding_go_term, "geneID"]
+print(wounding_genes)
+# Your wounding genes string
+
+# Split the wounding genes string into a vector of individual gene IDs
+gene_ids <- strsplit(wounding_genes, "/")[[1]]
+
+# Create a data frame to store the gene IDs
+wounding_genes_df <- data.frame(Gene_ID = gene_ids)
+
+# Save the data frame to a CSV file
+write.csv(wounding_genes_df, file = "wounding_genes_table.csv", row.names = FALSE)
+
+
+fungus_go_term <- "GO:0009817"  
+
+# Filter the go_enrich data frame to extract genes for the desired GO term
+fungus_genes <- go_enrich[go_enrich$ID == fungus_go_term, "geneID"]
+print(fungus_genes)
+# Your wounding genes string
+
+# Split the wounding genes string into a vector of individual gene IDs
+gene_ids <- strsplit(fungus_genes, "/")[[1]]
+
+# Create a data frame to store the gene IDs
+fungus_genes_df <- data.frame(Gene_ID = gene_ids)
+
+# Save the data frame to a CSV file
+write.csv(fungus_genes_df, file = "fungus_genes_table.csv", row.names = FALSE)
+# Display the data frame
+print(fungus_genes_df)
+
+
+# Plot top 20 GO clusters
+dotplot(go_enrich, showCategory = 20)
+# Install the necessary package if not already installed
+# install.packages("enrichplot")
+
+# rename column name
+onlyup_6h<- as.data.frame(onlyup_6h <- onlyup_6h[,2])
+str(onlyup_6h)
+
+colnames(onlyup_6h) <- c("TAIR")
+
+# Install and load the AnnotationDbi package
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("AnnotationDbi")
+library(AnnotationDbi)
+
+# Load the appropriate organism annotation package
+# Here, we're using Arabidopsis thaliana annotation package
+if (!requireNamespace("org.At.tair.db", quietly = TRUE))
+  BiocManager::install("org.At.tair.db")
+library(org.At.tair.db)
+
+# Perform ID mapping
+mapped <- select(org.At.tair.db, keys = onlyup_6h$TAIR, columns = c("ENTREZID", "SYMBOL"), keytype = "TAIR")
+# Remove duplicates from the TAIR column
+onlyup_6h <- mapped[!duplicated(mapped$TAIR),]
+
+
+# DO ENRICHMENT
+
+# ont = "BP" (biological process), "MF" (molecular function), "CC" (cellular component) or "ALL" 
+# pAdjustMethod = "BH" (method of Benjamini, Hochberg, and Yekutieli control the false discovery rate)
+# pvalueCutoff  and  qvalueCutoff can be set higher or lower if you want more or less stringency, respectively
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("clusterProfiler")
+library(clusterProfiler)
+
+GO_IDs<- enrichGO(gene       = onlyup_6h$inters.up_6h,
+                       OrgDb         = org.At.tair.db,
+                       ont           = "BP",
+                       pAdjustMethod = "BH",
+                       pvalueCutoff  = 0.5,
+                       qvalueCutoff  = 0.4,
+                       readable      = TRUE)
+
+
+# do the convetional dotplot
+# showCategory can be changed to how many catergories you want to be shown in the plot
+# use the split = "ONTOLOGY" if you set "ont = "ALL"" in the previous enrichment
+# Install and load the viridis package
+install.packages("viridis")
+library(viridis)
+
+
+dotplot(GO_IDs,
+        x = "pvalue",
+        color = "pvalue",
+        showCategory = 400,
+        #split = "ONTOLOGY",
+        orderBy="pvalue",
+        label_format=45,  # = how many characters are in one line before text is wraped
+        font.size = 10, 
+        decreasing = TRUE)+
+  scale_color_viridis() # for nicer colors
+
+# calculate similarity matrix rrvgo
+simMatrix<- calculateSimMatrix(GO_IDs$ID,
+                               orgdb="org.At.tair.db",
+                               ont="BP")
+# this might take some minutes
+
+# get the scores of the similarity matrix
+scores <- setNames(-log10(GO_IDs$qvalue), GO_IDs$ID)
+
+# reduce GO terms
+reducedTerms <- reduceSimMatrix(simMatrix,
+                                scores,
+                                threshold=0.7,
+                                orgdb="org.At.tair.db")
+names(reducedTerms)
+
+
+# the lower the threshold, the more GO terms are included (= they will be less reduced)
+
+# scatterplot of reduced GO terms
+library(rrvgo)
+library(ggplot2)
+
+scatterPlot(simMatrix, reducedTerms) +
+  theme_bw() +
+  scale_color_manual(values = viridis(54)) +
+  geom_text(aes(label = GO_ID), size = 3, vjust = -0.5)
+scatterPlot(simMatrix, reducedTerms) +
+  theme_bw() +
+  scale_color_manual(values = viridis(54)) +
+  geom_text(aes(label = "go"), size = 3, vjust = -0.5)
+
+
+
+This matrix tells Deseq2 how to build the model and which samples to group together
+The intercept is the baseline level. by default, all samples will have a 1 for the baseline
+This is because our fold-change coefficient will be calculated by looking at the distance to this intercept
+Whether there is a difference to add to the model between it and baseline
+With 0 establish the baseline 
+With 1, the difference is added –this is our fold change
+
+
+
+
+#Load required packages####
+library("DESeq2")
+library("ggplot2")
+library("pheatmap")
+
+
+#Load sample annotation
+sampleTable <- read.table("EGCG_metadata.txt",header=TRUE)
+
+#Define the folder that contains the counts files  
+folder <- "salmon_counts_rounded"
+
+#Import the data ####
+dds <- DESeqDataSetFromHTSeqCount(sampleTable=sampleTable,
+                                  directory=folder,
+                                  design=~time+treatment)
+library(tidyverse)
+
+counts(dds)["AT5G61890",]
+
+#Remove genes (rows) with less than 10 counts in total
+dds<- dds[rowSums2(counts(dds)) >=10, ]
+
+#For functional analysis: create list of genes expressed in tissue 
+background <- rownames(dds)
+write.table(background,"EGCG.txt",quote=FALSE,
+            row.names=FALSE,col.names=FALSE)
+
+
+colData(dds)$treatment
+#relevel to get control as reference
+colData(dds)$treatment <- relevel(colData(dds)$treatment,
+                                  ref="DMSO")
+
+#DESEq() runs the complete DE pipeline on the raw counts
+dds <- DESeq(dds,test="LRT",full=~time+treatment,reduced=~time)
+
+#Create the dispersion plot
+plotDispEsts(dds)
+
+#See the factors used for library size normalization
+sizeFactors(dds)
+
+#Question: Normalized counts of ?
+counts(dds,normalized=TRUE)["AT5G61890",]
+#On plots you use normalized counts!!
+counts(dds,normalized=TRUE)
+
+#check comparisons that were made
+resultsNames(dds)
+
+#look at the manual of results()
+?results
+
+#results() returns log2FC and p vals for comparison
+res1 <- results(dds,name="treatment_EGCG_vs_DMSO")
+head(res,n=10)
+res2 <- results(dds,name="time_6h_vs_12h")
+head(res2,n=10)
+#res < metadata with info on the meaning of the columns:
+mcols(res1,use.names=TRUE)
+mcols(res2,use.names=TRUE)
+#ask for a summary of res
+summary(res1)
+summary(res2)
+summary(results(dds,alpha=0.0001))
+
+
+#Shrink lfcs ####FOR THE 5TH comparision
+res1.shr <- lfcShrink(dds,coef=3)
+res2.shr <- lfcShrink(dds,coef=2)
+#Question: Original (unshrunken) lfc of ENSG00000004799?
+res["AT5G61890", ]
+#Question: Shrunken lfc of ENSG00000004799?
+res1.shr["AT5G61890", ]
+res2.shr["AT5G61890", ]
+
+#Remove genes with missing p values ####
+res1Fix <- res1.shr[!is.na(res1.shr$padj), ]
+res2Fix <- res2.shr[!is.na(res2.shr$padj), ]
+
+dim(res1Fix)
+#From res.shr remove rows with missing adjusted p values
+#Question: How many genes were removed?
+
+#Add gene symbols to data ####
+library(plyr)
+
+#Load arabidopsis annotation
+# Install and load the annotation package
+if (!requireNamespace("org.At.tair.db", quietly = TRUE)) {
+  BiocManager::install("org.At.tair.db")
+}
+
+library(org.At.tair.db)
+
+# Get keys for Arabidopsis
+keys <- keys(org.At.tair.db)
+
+
+head(keys)
+columns(org.At.tair.db)
+#Make data frame with Ensembl IDs and symbols for all human genes
+s <- AnnotationDbi::select(org.At.tair.db,keys=keys,
+                           columns=c("SYMBOL"))
+head(s)
+
+#Remove rows with missing Ensembl IDs
+s <- s[!is.na(s$SYMBOL),]
+head(s)
+
+#Create column in resFix with Ensembl IDS (now row names)
+res1DF <- as.data.frame(res1Fix)
+res2DF <- as.data.frame(res2Fix)
+
+res1DF$TAIR <- rownames(res1DF)
+head(res1DF)
+res2DF$TAIR <- rownames(res2DF)
+
+#join only work with data frame
+#Join both tables based on Ensembl IDs
+res1DF <- join(res1DF,s,by=c("TAIR")) 
+res2DF <- join(res2DF,s,by=c("TAIR")) 
+#Remove duplicated rows
+res1DF <- res1DF[!duplicated(res1DF$TAIR),]
+res2DF <- res2DF[!duplicated(res2DF$TAIR),]
+#Question: What is the gene symbol of ENSG00000004799?
+res1DF[res1DF$TAIR=="AT5G61890", ]
+#Select DE genes ####
+resDF
+#Select genes with adjusted p-value < 0.01 (FDR = 1%)
+resstring1 <- res1DF[res1DF$padj < 0.05, ]
+resstring2 <- res2DF[res2DF$padj < 0.05, ]
+resstring1 <- res1DF[abs(res1DF$log2FoldChange) >= 1 & (res1DF$padj < 0.05), ]
+resstring2 <- res2DF[abs(res2DF$log2FoldChange) >= 1 & (res2DF$padj < 0.05), ]
+#Select genes with shrunken lfc at least 1 or -1 (2-fold)
+#Question: How many DE genes according to these thresholds?
+
+
+
+#Variance stabilizing transformation ####
+vsd <- vst(dds,blind=FALSE)
+class(vsd)
+#Is sample annotation still there? 
+colData(vsd)
+#Question: vst count of ENSG00000004799 in SRR1039509?
+assay(vsd)["AT5G61890", ]
+#Plots ####
+#DE genes table with iSEE ####
+library(iSEE)
+#Create a SingleCellExperiment object
+library(SingleCellExperiment)
+sce <- as(dds,"SingleCellExperiment")
+
+#Include DESeq results in sce
+library(iSEEde)
+sce <- embedContrastResults(res1Fix,sce,
+                            name="EGCG_vs_DMSO")
+install.packages("yaml")
+
+#Ask to visualize the results table
+#Do not show the columns lfcSE and pvalue
+app <- iSEE(sce,initial=list(DETable(
+  ContrastName="EGCG_vs_DMSO",
+  HiddenColumns=c("lfcSE","pvalue"),
+  PanelWidth=8L)))
+shiny::runApp(app)
+#Click triangles next to log2FoldChange and padj
+#to sort the genes accordingly
+#Download panel output
+
+#Plot the normalized counts for gene ENSG00000004799 ####
+plotCounts(dds,gene="AT5G61890",
+           intgroup="treatment",
+           main="AT5G61890")
+
+#nicer version using ggplot2
+d <- plotCounts(dds,gene="AT5G61890", 
+                intgroup="treatment", 
+                main="AT5G61890", 
+                returnData=TRUE)
+d
+
+#ggplot2 can handle the plots generated by DESeq2
+P2<- ggplot(d,aes(treatment,count)) + 
+  geom_point() +
+  scale_y_continuous(trans="log10",breaks=c(25,100,400)) + 
+  ggtitle("AT5G61890")
+P2
+P2 <- ggplot(d, aes(factor(treatment), count)) +
+  geom_point() +
+  scale_y_continuous(trans = "log10", breaks = c(25, 100, 400)) +
+  ggtitle("AT5G61890")
+P2
+
+#Question: make same plot but color dots according to cell line
+d <- plotCounts(dds,gene="ENSG00000004799", 
+                intgroup=c("treatment","cells"), 
+                main="ENSG00000004799",returnData=TRUE)
+ggplot(d,aes(treatment,count,color=cells)) +
+  geom_point() + 
+  scale_y_log10(breaks=c(25,100,400)) + 
+  labs(title="ENSG00000004799")
+#Histogram of shrunken log fold changes####
+#Question: Use ggplot2 to make a histogram
+ggplot(resDF,aes(x=log2FoldChange())+
+         geom_histogram(bins = 60) +xlim(-5,5))
+ggplot(resDF,aes(x=log2FoldChange)) + 
+  geom_histogram(bins=60) + xlim(-5,5)
+#Volcano plot with iSEE ####
+app <- iSEE(sce,initial=list(DETable(
+  ContrastName="dex_vs_control",
+  HiddenColumns=c("baseMean","lfcSE","pvalue"),
+  PanelWidth=5L),
+  VolcanoPlot(ContrastName="dex_vs_control",
+              PanelWidth=5L)))
+#shiny::runApp(app)
+#Hover mouse over points in Volcano plot
+#Volcano plot: 
+#Visual parameters: Row selection
+#Selection parameters: Receive...from: Differential expression table
+#Differential expression table:
+#Sort according to LFC
+#Fill in name of gene with highest LFC in Search
+#Click the Reset button at the top
+#Selection parameters: Receive...from: Volcano plot
+#Volcano plot:
+#Draw a rectangle with mouse over points at top of plot
+#Click question marks
+
+#Volcano plot with ggplot2 ####
+#Different color for down and up 
+up <- (resDF$log2FoldChange > 1 & -log10(resDF$padj) > 2)
+down <- (resDF$log2FoldChange < -1 & -log10(resDF$padj) > 2)
+sum(down)
+#Create vectors for up and down genes
+#Question: How many down genes?
+sum(up)
+#Combine the 2 vectors into 1 column in DF
+resDF$DE <- ifelse(up,'up',ifelse(down,'down','not DE'))
+
+#Question: What is the DE status of ENSG00000004799?
+resDF[resDF$ENSEMBL=="ENSG00000004799",]
+
+#Make the Volcano plot
+ggplot(resDF,aes(log2FoldChange,-log10(padj))) + 
+  geom_point(shape=1,aes(color=DE)) +
+  scale_color_manual(name="differential expression",
+                     values=c("green","black","red"),
+                     labels=c(">2 fold DOWN and p<0.01",
+                              "|lfc|<1 or p>0.01",
+                              ">2 fold UP and p<0.01")) +
+  ggtitle("p-value versus fold change") + 
+  geom_hline(yintercept=2,color="red",linetype=2) +
+  geom_vline(xintercept=-1,color="red",linetype=2) +
+  geom_vline(xintercept=1,color="red",linetype=2)
+
+#create column label to use for the labeling:
+#padj < 10^-40 and lfc at least 2 or -2
+#Question: How many genes meet these criteria?
+#Create the Volcano plot with ggplot2 with labels
+library(ggrepel)
+ggplot(resDF,aes(log2FoldChange,-log10(padj))) + 
+  geom_point(shape=1,aes(color=DE)) +
+  scale_color_manual(name="differential expression",
+                     values=c("green","black","red"),
+                     labels=c(">2 fold DOWN and p<0.01",
+                              "|lfc|<1 or p>0.01",
+                              ">2 fold UP and p<0.01")) +
+  ggtitle("p-value versus fold change") + 
+  geom_hline(yintercept=2,color="red",linetype=2) +
+  geom_vline(xintercept=-1,color="red",linetype=2) +
+  geom_vline(xintercept=1,color="red",linetype=2) + 
+  geom_text_repel(aes(label=ifelse(lab,SYMBOL,"")),size=2)
+#ggsave(plot=p,filename="Plot.png",width=10,height=6,units="cm")
+
+#PCA plot ####
+dataPCA <- plotPCA(vsd,intgroup=c("treatment","cells"),
+                returnData=TRUE)
+
+#Include the PCA representation to sce
+assay(sce,"vst") <- assay(vsd)
+reducedDim(sce,"PCA") <- dataPCA[,c("PC1","PC2")]
+
+app <- iSEE(sce,initial=list(
+  ReducedDimensionPlot(PanelWidth=4L,PanelHeight=400L)))
+#shiny::runApp(app)
+#Visual parameters: color by Column data
+#Hover mouse over points
+#Download is pdf and format is not so nice
+
+
+devtools::install_github("zhangyuqing/sva-devel")
+
+
+#Make the PCA plot with ggplot ####
+percentVar <- round(100 * attr(dataPCA,"percentVar"))
+#Question: What factor determines PC1?
+#Question: What if cells determines PC1?
+#Question: If you see an outlier sample, can you remove it?
+#Question: Color PCA according to expression of ENSG00000004799
+
+#Which genes contribute most to PCs?
+#Do PCA yourself using prcomp()
+pcs <- prcomp(t(assay(vsd)))
+head(pcs$rotation)
+#Look for genes with highest/lowest contribution = markers
+#Question: Which gene has the highest contribution to PC1?
+#Question: what is the shrunken lfc and padj of this gene?
+#Question: which gene has the lowest contribution?
+
+#Heat map ####
+app <- iSEE(sce,initial=list(
+  VolcanoPlot(ContrastName="dex_vs_control",
+              PanelWidth=4L),
+  ComplexHeatmapPlot(PanelWidth=4L)))
+#shiny::runApp(app)
+#Select top genes in Volcano plot
+#Heatmap: 
+#Data parameters: 
+#Assay choice: vst
+#Unselect Use custom rows !!!
+#Visual parameters:
+#Transform - Center - Scale
+#Column annotations: treatment
+#Selection parameters:
+#Retrieve row selection from Volcano plot
+#No clustering, no trees 
+
+#Make heatmap with pheatmap ####
+#Retrieve vst values for DE genes
+toplot <- assay(vsd)[resString$ENSEMBL,]
+
+#for selection you need Ensembl IDs: they are unique
+#for heat map you want gene symbols because they are meaningful
+rownames(toplot) <- resString$SYMBOL
+
+#variables with grouping details for heat map
+df <- as.data.frame(colData(vsd)[,c("treatment","cells")])
+ann_colors <- list(treatment=c(control="blue",Dex="red"),
+                   cells=c(N61311="aquamarine",N052611="blue",
+                           N080611="darkgrey",N061011="azure"))
+
+#use pheatmap() to make the heat map of the toplot data
+p <- pheatmap(toplot,annotation_col=df,annotation_colors=ann_colors,
+         color=colorRampPalette(c("green","black","red"))(50))
+
+#Save the heat map
+pdf("heatmap.pdf",width=5,height=10)
+grid::grid.newpage()
+grid::grid.draw(p$gtable)
+dev.off()
+png("heatmap.png",width=400,height=800)
+grid::grid.newpage()
+grid::grid.draw(p$gtable)
+dev.off()
+
+#Simplify for training: 20 most significant genes
+#Question: ENSEMBL ID of the gene with the 20th lowest padj?
+#Create heatmap for these 20 genes
+#Question: Which gene is the least like the others?
+
+#You look at absolute expression (normalized + variance stabilized + log)
+#You can also look at expression pattern (up/down) by scaling the genes
+#mean = 0 and SD = 1 to make genes comparable
+?pheatmap
+pheatmap(toplot,annotation_col=df,annotation_colors=ann_colors,
+         scale="row",border_color="transparent",
+         clustering_method="average",
+         cutree_cols=2,cutree_rows=2,fontsize=7,
+         color=colorRampPalette(c("green","black","red"))(50))
+#Question: Which gene is the odd one out if you scale the genes?
+
+#What if you want to know which genes belong to each cluster?
+#Do the clustering yourself: data = matrix with scaled genes
+?scale
+toplot.scale <- t(scale(t(toplot)))
+
+#Calculate Euclidean distances
+?dist
+dis <- dist(toplot.scale)
+
+#Hierarchical clustering based on Euclidean distances
+h <- hclust(dis,method="average")
+
+#Make dendrogram
+library(dendextend)
+dend <- as.dendrogram(h)
+
+#Find clusters and add cluster numbers to data 
+toplot.scale.df <- as.data.frame(toplot.scale)
+toplot.scale.df$cluster <- cutree(dend,k=2)
+toplot.scale.df$symbol <- rownames(toplot.scale.df)
+
+#Plot expression patterns and color per cluster ####
+#Convert data with cluster info to long format
+library(reshape2)
+toplotl <- melt(toplot.scale.df,id.vars=9:10,measure.vars=1:8)
+#Make a line plot
+#You need to tell R how to draw the lines
+ggplot(toplotl,aes(variable,value,color=factor(cluster),
+                   group=symbol)) + 
+  geom_line() + theme(axis.text.x=element_text(angle=90)) +
+  theme(axis.title.x=element_blank()) +
+  labs(y="scaled vst",color="cluster")
+
+#slides 6
+#Save results ####
+#write resString to a file outputRNASeq.txt
+write.table(resString,file="outputRNASeq.txt",quote=FALSE)
+
+#write Ensembl IDs of DE genes
+write.table(resString$ENSEMBL,file="outputNames.txt",
+            quote=FALSE,col.names=FALSE,row.names=FALSE)
+
+#Question: ENSEMBL IDs of upregulated genes
+
+#ENSEMBL IDs of downregulated genes
+Ensembl.down <- resString$ENSEMBL[resString$log2FoldChange < 0]
+write.table(Ensembl.down,file="outputdownEnsembl.txt",quote=FALSE,
+            col.names=FALSE,row.names=FALSE)
+
+#Gene symbols of upregulated genes
+Sym.up <- na.omit(resString$SYMBOL[resString$log2FoldChange > 0])
+write.table(Sym.up,file="outputupNames.txt",quote=FALSE,
+            col.names=FALSE,row.names=FALSE)
+
+#Question: Gene symbols of downregulated genes
+
+#Data for GSEA
+GSEA <- resDF[c(1:2,5:7)]
+write.table(GSEA,file="dataGSEA.txt",quote=FALSE,row.names=FALSE)
+
+#Load required packages####
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(plyr)
+library(tidyverse)
+
+#Set working directory####
+setwd("~/EGCG_RNAseq")
+
+#Load sample annotation
+sampleTable <- read.table("EGCG6h_metadata",header=TRUE)
+
+#Locate the data ####
+folder <- "salmon_counts_rounded"
+
+#Import the data ####
+dds <- DESeqDataSetFromHTSeqCount(sampleTable=sampleTable,
+                                  directory=folder,
+                                  design=~time + treatment)
+
+design_matrix <- model.matrix(~time + treatment,data = colData(dds))
+counts(dds)["AT5G61890",]
+
+#Remove genes (rows) with less than 10 counts in total ####
+dds <- dds[rowSums(counts(dds)) >= 10, ]
+
+dds <- DESeq(dds)
+res_LRT <- results(dds)
+# Create a tibble for LRT results
+library(tibble)
+
+res_LRT_tb <- res_LRT %>%
+  data.frame() %>%
+  rownames_to_column(var="gene") %>% 
+  as_tibble()
+
+res_LRT_tb
+
+# Subset to return genes with padj < 0.05
+sigLRT_genes <- res_LRT_tb %>% 
+  filter(padj < 0.05)
+
+# Subset results for faster cluster finding (for classroom demo purposes)
+clustering_sig_genes <- sigLRT_genes %>%
+  arrange(padj)
+# Obtain rlog values for those significant genes
+rld <- rlogTransformation(dds)
+rld_mat <- assay(rld)
+cluster_rlog <- rld_mat[clustering_sig_genes$gene, ]
+library(DEGreport)
+des<-colData(dds)
+clusters <- degPatterns(cluster_rlog, metadata = des, time="time", col="treatment")
+
+head(clusters)
+png(file="Trends_interaction.png",
+    width=1000, height=1000)
+degPlotCluster(clusters$normalized, "time", "treatment")
+dev.off()
+?degPlotCluster
+
+unique(clusters[["normalized"]][clusters[["normalized"]]$cluster==1,]$genes)
+
+plotCounts(dds_int,"AT2G45750",intgroup=c('time','treatment'))
+
+
+#Import the data ####
+dds <- DESeqDataSetFromHTSeqCount(sampleTable=sampleTable,
+                                  directory=folder,
+                                  design=~treatment+time)
+counts(dds)["AT5G61890",]
+
+#Remove genes (rows) with less than 10 counts in total ####
+dds <- dds[rowSums(counts(dds)) >= 10, ]
+
+dds_int <- DESeq(dds, test="LRT", reduced = ~ treatment )
+res_LRT <- results(dds_int)
+# Create a tibble for LRT results
+library(tibble)
+
+res_LRT_tb <- res_LRT %>%
+  data.frame() %>%
+  rownames_to_column(var="gene") %>% 
+  as_tibble()
+
+res_LRT_tb
+
+# Subset to return genes with padj < 0.05
+sigLRT_genes <- res_LRT_tb %>% 
+  filter(padj < 0.05)
+
+# Subset results for faster cluster finding (for classroom demo purposes)
+clustering_sig_genes <- sigLRT_genes %>%
+  arrange(padj)%>%
+  head(n=2000)
+# Obtain rlog values for those significant genes
+rld <- rlogTransformation(dds_int)
+rld_mat <- assay(rld)
+cluster_rlog <- rld_mat[clustering_sig_genes$gene, ]
+library(DEGreport)
+des<-colData(dds_int)
+clusters <- degPatterns(cluster_rlog, metadata = des, time="time", col="treatment")
+
+png(file="Trends_interaction.png",
+    width=1000, height=1000)
+degPlotCluster(clusters$normalized, "time", "treatment")
+dev.off()
+?degPlotCluster
+
+unique(clusters[["normalized"]][clusters[["normalized"]]$cluster==2,]$genes)
+plotCounts(dds_int,"AT5G61890",intgroup=c('time','treatment'))
+
+
+#Relevel to get control as reference ####
+colData(dds)$treatment <- relevel(colData(dds)$treatment,
+                                  ref="DMSO")
+
+#Differential expression analysis ####
+dds <- DESeq(dds,test="LRT",full=~time+treatment+time:treatment,reduced=~time+treatment)
+sizeFactors(dds_int)
+resultsNames(dds_int)
+normalized_counts <- counts(dds_int,normalized=TRUE)
+#Shrink lfcs ####
+res.shr <- lfcShrink(dds_int,coef=4)
+res.shr["AT5G61890",]
+#Remove genes with missing padj ####
+resDF <- as.data.frame(res.shr[!is.na(res.shr$padj),])
+
+#Add gene symbols to data ####
+library(org.At.tair.db)
+keys <- keys(org.At.tair.db)
+head(keys)
+columns(org.At.tair.db)
+
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+  install.packages("BiocManager")
+}
+BiocManager::install("AnnotationDbi")
+
+#Make data frame with Ensembl IDs and symbols for all genes
+s <- AnnotationDbi::select(org.At.tair.db, keys = keys, 
+                           columns = c("TAIR", "SYMBOL"))
+
+#Remove rows with missing GENE IDs
+s <- s[!is.na(s$TAIR),c("TAIR","SYMBOL")]
+
+#Create column in resFix with GENE IDS (now row names)
+resDF$TAIR <- rownames(resDF)
+
+#Join both tables based on Ensembl IDs
+resDF <- join(resDF,s,by=c("TAIR")) 
+
+#Remove duplicated rows
+resDF <- resDF[!duplicated(resDF$TAIR),]
+
+restring <- resDF[abs(resDF$padj<0.05),]
+#Variance stabilizing transformation ####
+vsd <- vst(dds,blind=FALSE)
+
+#Volcano plot ####
+library(ggrepel)
+up <- (resDF$log2FoldChange > 1 & resDF$padj < 0.01)
+down <- (resDF$log2FoldChange < -1 & resDF$padj < 0.01)
+resDF$DE <- ifelse(up,'up',ifelse(down,'down','not DE'))
+
+p <- ggplot(resDF,aes(log2FoldChange,-log10(padj))) + 
+  geom_point(shape=1,aes(color=DE)) +
+  scale_color_manual(name="differential expression",
+                     values=c("green","black","red"),
+                     labels=c(">2 fold DOWN and p<0.01",
+                              "|lfc|<1 or p>0.01",
+                              ">2 fold UP and p<0.01")) +
+  ggtitle("p-value versus fold change") + 
+  geom_hline(yintercept=2,color="red",linetype=2) +
+  geom_vline(xintercept=-1,color="red",linetype=2) +
+  geom_vline(xintercept=1,color="red",linetype=2)
+  geom_text_repel(aes(label=ifelse(lab,SYMBOL,"")),size=2)
+ggsave(plot=p,filename="Plot.png",width=10,height=6,units="cm")
+
+
+#PCA plot 
+
+# Perform size factor estimation and variance stabilizing transformation
+
+vsd <- vst(dds)
+
+# Create PCA plot
+dataPCA <- plotPCA(vsd, intgroup = c("treatment", "time"), returnData = TRUE)
+
+# Plot PCA
+ggplot(dataPCA, aes(x = PC1, y = PC2, color = treatment, shape = time)) +
+  geom_point(size = 3) +
+  ggtitle("PCA Plot") +
+  theme_minimal()
+
+memory.limit(size=4000)  # Set memory limit to 4GB
+
+heatmap_data <- assay(vsd)
+# Create a heatmap
+heatmap(heatmap_data, 
+        scale = "row",   # Scale rows (genes)
+        col = colorRampPalette(c("blue", "white", "red"))(50),  # Define color palette
+        main = "Heatmap",
+        Rowv = NA, Colv = NA  # Turn off hierarchical clustering
+)
+
+
+# Create a heatmap using pheatmap
+pheatmap(heatmap_data,
+         scale = "row",   # Scale rows (genes)
+         color = colorRampPalette(c("blue", "white", "red"))(50),  # Define color palette
+         main = "Heatmap",
+         cluster_rows = TRUE, cluster_cols = TRUE  # Turn off hierarchical clustering
+)
